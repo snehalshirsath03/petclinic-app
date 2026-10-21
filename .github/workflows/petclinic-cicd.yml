@@ -1,0 +1,66 @@
+name: PetClinic CI-CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: petclinic-cicd-main
+  cancel-in-progress: true
+
+jobs:
+  build-analyze-push:
+    name: Build, SonarQube Analysis and Push to Nexus
+    runs-on: [self-hosted, Linux, X64, petclinic-ec2]
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Verify Java and Docker
+        run: |
+          java -version
+          docker --version
+          ./mvnw -version
+
+      - name: Build and test with Maven
+        run: ./mvnw -B clean verify
+
+      - name: SonarQube analysis and Quality Gate
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          ./mvnw -B org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+            -Dsonar.projectKey=PetClinic-App \
+            -Dsonar.host.url=http://localhost:9000 \
+            -Dsonar.token="$SONAR_TOKEN" \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
+
+      - name: Log in to Nexus Docker registry
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          echo "$NEXUS_PASSWORD" | docker login localhost:5000 \
+            --username "$NEXUS_USERNAME" \
+            --password-stdin
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::7}"
+          docker build -t "localhost:5000/petclinic-app:${IMAGE_TAG}" .
+
+      - name: Push Docker image to Nexus
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::7}"
+          docker push "localhost:5000/petclinic-app:${IMAGE_TAG}"
+
+      - name: Log out from Nexus
+        if: always()
+        run: docker logout localhost:5000
