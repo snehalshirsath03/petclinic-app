@@ -1,8 +1,4 @@
-cd ~/petclinic-app
 
-rm -f .Jenkinsfile.swp
-
-cat > Jenkinsfile <<'EOF'
 pipeline {
     agent any
 
@@ -175,4 +171,3 @@ pipeline {
         }
     }
 }
-EOF
