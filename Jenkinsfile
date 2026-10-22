@@ -12,7 +12,6 @@ pipeline {
 
         NEXUS_REGISTRY = 'localhost:8083'
         NEXUS_IMAGE = 'localhost:8083/petclinic-app'
-        IMAGE_TAG = 'latest'
 
         APP_PORT = '18081'
         TEST_CONTAINER = 'petclinic-test'
@@ -24,7 +23,8 @@ pipeline {
             steps {
                 checkout scm
                 sh '''
-                    echo "Java used by pipeline:"
+                    set -eu
+                    echo "=== Java version ==="
                     java -version
                     echo "JAVA_HOME=$JAVA_HOME"
                 '''
@@ -35,7 +35,6 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-
                     export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
                     export PATH="$JAVA_HOME/bin:/usr/local/bin:/usr/bin:/bin"
 
@@ -45,14 +44,14 @@ pipeline {
                     echo "=== Maven ==="
                     mvn -version
 
-                    echo "=== Maven build and unit tests ==="
+                    echo "=== Build and unit tests ==="
                     mvn clean verify
                 '''
             }
             post {
                 always {
                     junit allowEmptyResults: true,
-                          testResults: '**/target/surefire-reports/*.xml, **/target/failsafe-reports/*.xml'
+                          testResults: '**/target/surefire-reports/*.xml,**/target/failsafe-reports/*.xml'
                 }
             }
         }
@@ -80,6 +79,7 @@ pipeline {
                         petclinic-app:${BUILD_NUMBER}
 
                     echo "Waiting for application startup..."
+
                     for i in $(seq 1 30); do
                         if curl -fsS "http://localhost:${APP_PORT}/" >/dev/null; then
                             echo "Application is responding."
@@ -88,7 +88,7 @@ pipeline {
                         sleep 5
                     done
 
-                    echo "Application did not become ready."
+                    echo "Application failed to become ready."
                     docker logs "$TEST_CONTAINER"
                     exit 1
                 '''
@@ -99,13 +99,15 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    HTTP_CODE=$(curl -sS -o /tmp/petclinic-response.html \
+
+                    HTTP_CODE=$(curl -sS \
+                        -o /tmp/petclinic-response.html \
                         -w '%{http_code}' \
                         "http://localhost:${APP_PORT}/")
 
                     echo "HTTP status: $HTTP_CODE"
-
                     test "$HTTP_CODE" = "200"
+
                     echo "Functional test passed."
                 '''
             }
@@ -115,7 +117,8 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    echo "Running ApacheBench: 100 requests, concurrency 5"
+
+                    echo "Running 100 requests with concurrency 5"
 
                     ab -n 100 -c 5 \
                         "http://localhost:${APP_PORT}/"
@@ -134,11 +137,10 @@ pipeline {
                     ]) {
                         sh '''
                             set -eu
-
                             export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
                             export PATH="$JAVA_HOME/bin:/usr/local/bin:/usr/bin:/bin"
 
-                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.0.0.4638:sonar \   
+                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.0.0.4638:sonar \
                                 -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
                                 -Dsonar.host.url="$SONAR_HOST_URL" \
                                 -Dsonar.token="$SONAR_TOKEN"
@@ -218,3 +220,4 @@ pipeline {
         }
     }
 }
+
