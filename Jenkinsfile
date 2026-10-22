@@ -140,7 +140,7 @@ pipeline {
                             export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
                             export PATH="$JAVA_HOME/bin:/usr/local/bin:/usr/bin:/bin"
 
-                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.0.0.4638:sonar \
+                            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.0.0.4389:sonar \
                                 -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
                                 -Dsonar.host.url="$SONAR_HOST_URL" \
                                 -Dsonar.token="$SONAR_TOKEN"
