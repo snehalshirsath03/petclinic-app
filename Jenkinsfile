@@ -4,7 +4,7 @@ pipeline {
 
     environment {
         JAVA_HOME = '/usr/lib/jvm/java-17-openjdk-amd64'
-        PATH = "/usr/lib/jvm/java-17-openjdk-amd64/bin:${env.PATH}"
+        PATH+JDK17 = '/usr/lib/jvm/java-17-openjdk-amd64/bin'
 
         AWS_REGION = 'ap-southeast-2'
         AWS_ACCOUNT_ID = '401106839558'
