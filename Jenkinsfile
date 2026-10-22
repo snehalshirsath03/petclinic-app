@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -209,6 +208,61 @@ pipeline {
                 '''
             }
         }
+
+        stage('Update GitOps Manifest') {
+            steps {
+                withCredentials([
+                    string(
+                        credentialsId: 'github-token',
+                        variable: 'GITHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+
+                        MANIFEST="argocd-manifests/deployment.yaml"
+                        ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+
+                        test -f "$MANIFEST"
+
+                        sed -i -E \
+                            "s|image: ${ECR_URI}:[^[:space:]]+|image: ${ECR_URI}:${BUILD_NUMBER}|" \
+                            "$MANIFEST"
+
+                        grep -F "image: ${ECR_URI}:${BUILD_NUMBER}" "$MANIFEST"
+
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@localhost"
+
+                        git add "$MANIFEST"
+
+                        if git diff --cached --quiet; then
+                            echo "Manifest already has this image tag."
+                        else
+                            git commit -m "Update PetClinic image to build ${BUILD_NUMBER} [skip ci]"
+
+                            ASKPASS="$(mktemp)"
+                            trap 'rm -f "$ASKPASS"' EXIT
+
+                            cat > "$ASKPASS" <<'ASKPASS_SCRIPT'
+#!/bin/sh
+case "$1" in
+    *Username*) printf '%s\n' 'x-access-token' ;;
+    *Password*) printf '%s\n' "$GITHUB_TOKEN" ;;
+    *) exit 1 ;;
+esac
+ASKPASS_SCRIPT
+
+                            chmod 700 "$ASKPASS"
+
+                            GIT_ASKPASS="$ASKPASS" \
+                            GIT_TERMINAL_PROMPT=0 \
+                                git push origin HEAD:main
+                        fi
+                    '''
+                }
+            }
+        }
     }
 
     post {
@@ -220,4 +274,3 @@ pipeline {
         }
     }
 }
-
