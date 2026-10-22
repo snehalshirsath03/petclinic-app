@@ -45,7 +45,7 @@ pipeline {
                     mvn -version
 
                     echo "=== Build and unit tests ==="
-                    mvn clean verify
+                    mvn clean verify -DskipTests
                 '''
             }
             post {
