@@ -1,6 +1,12 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 45, unit: 'MINUTES')
+    }
+
     environment {
         JAVA_HOME = '/usr/lib/jvm/java-21-openjdk-amd64'
         PATH = "/usr/lib/jvm/java-21-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin"
@@ -28,12 +34,14 @@ pipeline {
                     set -eu
 
                     echo "=== Environment ==="
-
                     java -version
                     javac -version
                     ./mvnw -version
                     docker --version
                     /usr/local/bin/aws --version
+
+                    echo "=== Memory Before Build ==="
+                    free -h
                 '''
             }
         }
@@ -43,10 +51,12 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Maven Build and Tests ==="
+                    echo "=== Maven Build and Unit Tests ==="
 
                     ./mvnw clean package \
                         -Dtest='!PostgresIntegrationTests,!MySqlIntegrationTests'
+
+                    echo "=== Maven Build Completed ==="
                 '''
             }
 
@@ -84,6 +94,8 @@ pipeline {
                 sh '''
                     set -eu
 
+                    echo "=== Starting Temporary PetClinic ==="
+
                     docker rm -f "$TEST_CONTAINER" 2>/dev/null || true
 
                     docker run -d \
@@ -91,26 +103,27 @@ pipeline {
                         -p "${APP_PORT}:8080" \
                         petclinic-app:${BUILD_NUMBER}
 
-                    echo "Waiting for PetClinic to start..."
+                    APP_READY=false
 
-                    for i in $(seq 1 30); do
-
+                    for i in $(seq 1 40); do
                         if curl -fsS \
                             "http://localhost:${APP_PORT}/" \
                             >/dev/null; then
 
-                            echo "PetClinic started successfully."
-                            exit 0
+                            APP_READY=true
+                            echo "PetClinic is ready."
+                            break
                         fi
 
+                        echo "Waiting for PetClinic..."
                         sleep 5
                     done
 
-                    echo "PetClinic failed to start."
-
-                    docker logs "$TEST_CONTAINER"
-
-                    exit 1
+                    if [ "$APP_READY" != "true" ]; then
+                        echo "PetClinic failed to start."
+                        docker logs "$TEST_CONTAINER"
+                        exit 1
+                    fi
                 '''
             }
         }
@@ -128,11 +141,14 @@ pipeline {
                         -w '%{http_code}' \
                         "http://localhost:${APP_PORT}/")
 
-                    echo "HTTP Status = $HTTP_CODE"
+                    echo "HTTP status: $HTTP_CODE"
 
                     test "$HTTP_CODE" = "200"
 
-                    echo "Functional test PASSED."
+                    grep -qi "petclinic" \
+                        /tmp/petclinic-response.html
+
+                    echo "Functional test passed."
                 '''
             }
         }
@@ -144,12 +160,87 @@ pipeline {
 
                     echo "=== Performance Test ==="
 
-                    command -v ab
-
                     ab \
                         -n 100 \
                         -c 5 \
                         "http://localhost:${APP_PORT}/"
+                '''
+            }
+        }
+
+        stage('Stop Temporary Test App') {
+            steps {
+                sh '''
+                    echo "=== Stop Temporary PetClinic ==="
+
+                    docker rm -f "$TEST_CONTAINER" \
+                        2>/dev/null || true
+
+                    free -h
+                '''
+            }
+        }
+
+        stage('Start SonarQube and Nexus') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "=== Starting SonarQube and Nexus ==="
+
+                    docker start sonarqube
+                    docker start nexus
+
+                    echo "Waiting for SonarQube..."
+
+                    SONAR_READY=false
+
+                    for i in $(seq 1 90); do
+                        if curl -fsS \
+                            http://localhost:9000/api/system/status \
+                            | grep -q '"status":"UP"'; then
+
+                            SONAR_READY=true
+                            echo "SonarQube is UP."
+                            break
+                        fi
+
+                        sleep 5
+                    done
+
+                    if [ "$SONAR_READY" != "true" ]; then
+                        echo "SonarQube failed to become ready."
+                        docker logs sonarqube --tail 100
+                        exit 1
+                    fi
+
+                    echo "Waiting for Nexus..."
+
+                    NEXUS_READY=false
+
+                    for i in $(seq 1 90); do
+                        if curl -fsS \
+                            http://localhost:8081/ \
+                            >/dev/null; then
+
+                            NEXUS_READY=true
+                            echo "Nexus is ready."
+                            break
+                        fi
+
+                        sleep 5
+                    done
+
+                    if [ "$NEXUS_READY" != "true" ]; then
+                        echo "Nexus failed to become ready."
+                        docker logs nexus --tail 100
+                        exit 1
+                    fi
+
+                    echo "=== CI Services Ready ==="
+
+                    free -h
+                    docker stats --no-stream
                 '''
             }
         }
@@ -198,7 +289,7 @@ pipeline {
                     sh '''
                         set -eu
 
-                        echo "=== Nexus Push ==="
+                        echo "=== Push Image to Nexus ==="
 
                         echo "$NEXUS_PASSWORD" |
                             docker login \
@@ -228,25 +319,39 @@ pipeline {
             }
         }
 
+        stage('Stop SonarQube and Nexus') {
+            steps {
+                sh '''
+                    echo "=== Stopping SonarQube and Nexus ==="
+
+                    docker stop sonarqube nexus || true
+
+                    free -h
+                '''
+            }
+        }
+
         stage('Push Image to Amazon ECR') {
             steps {
                 sh '''
                     set -eu
 
-                    echo "=== Amazon ECR Push ==="
+                    echo "=== Push Image to Amazon ECR ==="
 
                     ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
                     ECR_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}"
 
-                    /usr/local/bin/aws sts get-caller-identity
+                    /usr/local/bin/aws sts \
+                        get-caller-identity
 
-                    /usr/local/bin/aws ecr describe-repositories \
+                    /usr/local/bin/aws ecr \
+                        describe-repositories \
                         --repository-names "$ECR_REPOSITORY" \
                         --region "$AWS_REGION" \
                         >/dev/null
 
-                    /usr/local/bin/aws ecr get-login-password \
+                    /usr/local/bin/aws ecr \
+                        get-login-password \
                         --region "$AWS_REGION" |
                         docker login \
                             --username AWS \
@@ -267,9 +372,10 @@ pipeline {
                     docker push \
                         "${ECR_URI}:latest"
 
-                    docker logout "$ECR_REGISTRY"
+                    docker logout \
+                        "$ECR_REGISTRY"
 
-                    echo "Amazon ECR push completed."
+                    echo "ECR push completed."
                 '''
             }
         }
@@ -287,12 +393,11 @@ pipeline {
                     sh '''
                         set -eu
 
-                        echo "=== GitOps Manifest Update ==="
+                        echo "=== Update GitOps Manifest ==="
 
                         MANIFEST="argocd-manifests/deployment.yaml"
 
                         ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
                         ECR_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}"
 
                         test -f "$MANIFEST"
@@ -301,13 +406,15 @@ pipeline {
                             "s|image: .*petclinic-app:[^[:space:]]+|image: ${ECR_URI}:${BUILD_NUMBER}|" \
                             "$MANIFEST"
 
-                        echo "New deployment image:"
+                        echo "Updated image:"
 
                         grep "image:" "$MANIFEST"
 
-                        git config user.name "Jenkins"
+                        git config \
+                            user.name "Jenkins"
 
-                        git config user.email "jenkins@localhost"
+                        git config \
+                            user.email "jenkins@localhost"
 
                         git add "$MANIFEST"
 
@@ -361,11 +468,24 @@ ASKPASS_SCRIPT
         always {
 
             sh '''
+                echo "=== Final Cleanup ==="
+
                 docker rm -f "$TEST_CONTAINER" \
+                    2>/dev/null || true
+
+                docker ps -aq \
+                    --filter "ancestor=mysql:9.7" |
+                    xargs -r docker rm -f || true
+
+                docker ps -aq \
+                    --filter "ancestor=testcontainers/ryuk:0.14.0" |
+                    xargs -r docker rm -f || true
+
+                docker stop sonarqube nexus \
                     2>/dev/null || true
             '''
 
-            echo 'Temporary PetClinic test container removed.'
+            echo 'Temporary containers and CI services cleaned up.'
         }
 
         success {
@@ -373,7 +493,7 @@ ASKPASS_SCRIPT
         }
 
         failure {
-            echo 'PetClinic CI/CD pipeline failed. Check the first failed stage.'
+            echo 'Pipeline failed. Check the first failed stage.'
         }
     }
 }
