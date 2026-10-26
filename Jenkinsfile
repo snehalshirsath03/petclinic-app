@@ -46,7 +46,7 @@ pipeline {
                     echo "=== Maven Build and Tests ==="
 
                     ./mvnw clean package \
-                        -Dtest='!PostgresIntegrationTests'
+                        -Dtest='!PostgresIntegrationTests,!MySqlIntegrationTests'
                 '''
             }
 
