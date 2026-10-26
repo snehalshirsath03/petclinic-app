@@ -17,6 +17,6 @@ spec:
         - name: ecr-registry-secret
       containers:
         - name: petclinic
-          image: 401106839558.dkr.ecr.ap-southeast-2.amazonaws.com/petclinic-app:17
+          image: 401106839558.dkr.ecr.ap-southeast-2.amazonaws.com/petclinic-app:1
           ports:
             - containerPort: 8080
